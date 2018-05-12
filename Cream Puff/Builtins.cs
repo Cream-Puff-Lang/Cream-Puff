@@ -1,0 +1,4 @@
+﻿namespace CreamPuff {
+    class Builtins {
+    }
+}

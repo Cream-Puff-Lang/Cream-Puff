@@ -1,0 +1,34 @@
+﻿					{
+                        r.ToIL(s, g, m);
+                        if (!l.Assignable())
+                            throw new Exception("Left argument of = is not assignable");
+                        if (l is ILVariable v) {
+                            if (v.IsArgument) {
+                                if (v.Index <= 255)
+                                    g.Emit(OpCodes.Starg_S, v.Index);
+                                else
+                                    g.Emit(OpCodes.Starg, v.Index);
+                            } else {
+                                switch (v.Index) {
+                                    case 0:
+                                        g.Emit(OpCodes.Stloc_0);
+                                        break;
+                                    case 1:
+                                        g.Emit(OpCodes.Stloc_1);
+                                        break;
+                                    case 2:
+                                        g.Emit(OpCodes.Stloc_2);
+                                        break;
+                                    case 3:
+                                        g.Emit(OpCodes.Stloc_3);
+                                        break;
+                                    case var i when i <= 255:
+                                        g.Emit(OpCodes.Stloc_S, v.Index);
+                                        break;
+                                    default:
+                                        g.Emit(OpCodes.Stloc, v.Index);
+                                        break;
+                                }
+                            }
+                        }
+                    }
