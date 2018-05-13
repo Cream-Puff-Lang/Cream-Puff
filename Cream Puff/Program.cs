@@ -2,8 +2,11 @@
 
 namespace CreamPuff {
     class Program {
+        /// <summary>
+        /// Start a Cream Puff parser RPPL.
+        /// </summary>
+        /// <param name="args">Passed arguments. Currently unused.</param>
         static void Main(string[] args) {
-            // TODO: everything
             var parser = new Parser("");
             while (true) {
                 Console.ForegroundColor = ConsoleColor.White;

@@ -6,25 +6,60 @@ using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization.Formatters.Binary;
 
+// TODO: fix basically every integer type
 namespace CreamPuff {
-
+    /// <summary>
+    /// Value writable to CIL.
+    /// </summary>
     public interface ILValue {
+        /// <summary>
+        /// Whether value can be assigned to.
+        /// </summary>
+        /// <returns></returns>
         bool Assignable();
+
+        /// <summary>
+        /// Generate IL to push value onto stack.
+        /// </summary>
+        /// <param name="s">Current scope.</param>
+        /// <param name="g">IL generator.</param>
+        /// <param name="m">Current module.</param>
         void ToIL(ILScope s, ILGenerator g, ModuleBuilder m);
     }
 
+    /// <summary>
+    /// Constant.
+    /// </summary>
     public interface ILConstant : ILValue { }
 
+    /// <summary>
+    /// Number.
+    /// </summary>
     public interface ILNumber : ILConstant { }
 
+    /// <summary>
+    /// Integer.
+    /// </summary>
     public interface ILInteger : ILNumber { }
 
+    /// <summary>
+    /// Signed integer.
+    /// </summary>
     public interface ILInt : ILInteger { }
 
+    /// <summary>
+    /// Unsigned integer.
+    /// </summary>
     public interface ILUint : ILInteger { }
 
+    /// <summary>
+    /// Floating point number.
+    /// </summary>
     public interface ILFloat : ILNumber { }
 
+    /// <summary>
+    /// 1-byte signed integer.
+    /// </summary>
     public class ILInt8 : ILInt {
         public byte Value;
 
@@ -32,6 +67,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 2-byte signed integer.
+    /// </summary>
     public class ILInt16 : ILInt {
         public short Value;
 
@@ -42,6 +80,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 4-byte signed integer.
+    /// </summary>
     public class ILInt32 : ILInt {
         public int Value;
 
@@ -54,6 +95,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 8-byte signed integer.
+    /// </summary>
     public class ILInt64 : ILInt {
         public long Value;
 
@@ -68,6 +112,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// Arbitrary precision signed integer.
+    /// </summary>
     public class ILBigInt : ILInt {
         private static readonly BinaryFormatter f = new BinaryFormatter();
         private static readonly MethodInfo ia = typeof(RuntimeHelpers).GetMethod("InitializeArray", new[] { typeof(System.Array), typeof(System.RuntimeFieldHandle) });
@@ -90,6 +137,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 1-byte unsigned integer.
+    /// </summary>
     public class ILUInt8 : ILUint {
         public char Value;
 
@@ -97,6 +147,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 2-byte unsigned integer.
+    /// </summary>
     public class ILUInt16 : ILUint {
         public ushort Value;
 
@@ -107,6 +160,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// 4-byte unsigned integer.
+    /// </summary>
     public class ILUInt32 : ILUint {
         public uint Value;
 
@@ -119,6 +175,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// Floating point number.
+    /// </summary>
     public class ILFloat32 : ILFloat {
         public float Value;
 
@@ -126,6 +185,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// Double precision floating point number.
+    /// </summary>
     public class ILFloat64 : ILFloat {
         public double Value;
 
@@ -133,6 +195,9 @@ namespace CreamPuff {
         public bool Assignable() => false;
     }
 
+    /// <summary>
+    /// String.
+    /// </summary>
     public class ILString : ILConstant {
         public string Value;
 
@@ -141,6 +206,9 @@ namespace CreamPuff {
     }
 
     // TODO: this is bad idea probably?
+    /// <summary>
+    /// Binary expression.
+    /// </summary>
     public class ILBinary : ILValue {
         public ILValue Left;
         public ILValue Right;
@@ -152,6 +220,9 @@ namespace CreamPuff {
         public bool Assignable() => IsAssignable;
     }
 
+    /// <summary>
+    /// Variable (argument or local variable).
+    /// </summary>
     public class ILVariable : ILValue {
         public bool IsArgument;
         public short Index;

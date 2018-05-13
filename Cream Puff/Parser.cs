@@ -6,16 +6,24 @@ using System.Text.RegularExpressions;
 
 namespace CreamPuff {
     using BinaryOperatorLookup = Dictionary<string, Dictionary<Type, Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>>>;
-    // using BinaryOperatorLookup1 = Dictionary<Type, Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>>;
-    // using BinaryOperatorLookup2 = Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>;
+    using BinaryOperatorLookup1 = Dictionary<Type, Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>>;
+    using BinaryOperatorLookup2 = Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>;
     // 2 ILValues because Unary operators are given their content too (for parenthesized operators)
     using UnaryOperatorLookup = Dictionary<string, Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>>;
     using UnaryOperatorLookup1 = Dictionary<Type, Action<ILValue, ILValue, ILScope, ILGenerator, ModuleBuilder>>;
 
     // TODO: do end indices go at or after last character
-    // TODO: adding new precedences
+    // TODO: adding new precedence level - incremented all precedences at or above new precedence
+    // TODO: comments and ; - for ; insert the ":" tokens as identifiers after every line, discard when in the middle of an operator
+    // TODO: prepare pass for IL generation. this will mostly be to set up variables and whatnot.
+    /// <summary>
+    /// Parses Cream Puff code.
+    /// </summary>
     class Parser {
         // TODO: remove '‹', '›'?
+        /// <summary>
+        /// Map of open bracket to close bracket.
+        /// </summary>
         public static Dictionary<char, char> BracketLookup = new Dictionary<char, char> {
             { '(', ')' }, { '{', '}' }, { '[' , ']' }, { '“', '”' }, { '‘', '’' }, { '‹', '›' },
             { '«', '»' }, { '（', '）' }, { '［', '］' }, { '｛', '｝' }, { '｟', '｠' }, { '⦅', '⦆' }, { '〚', '〛' },
@@ -30,26 +38,75 @@ namespace CreamPuff {
             { '᚛', '᚜' }, {'༺', '༻' }, { '༼', '༽' },
         };
 
+        /// <summary>
+        /// Precedence (as number) for infix operators.
+        /// </summary>
         public Dictionary<string, short> InfixPrecedence = new Dictionary<string, short> {
-            { ",", 0 }
+            { "\n", 0 },
+            { ";", 0 },
+            { ",", 1 },
+            { ":", 2 }
         };
 
+        /// <summary>
+        /// Precedence (as number) for prefix operators.
+        /// </summary>
         public Dictionary<string, short> PrefixPrecedence = new Dictionary<string, short>();
 
+        /// <summary>
+        /// Precedence (as number) for postfix operators.
+        /// </summary>
         public Dictionary<string, short> PostfixPrecedence = new Dictionary<string, short> {
             // TODO: this probably needs to be changed after thing is done. also reduce precedence because we won't have some things
             { "()", 19 },
             { "{}", 20 }
         };
 
+        /// <summary>
+        /// Whether an operator binds right-to-left, for every infix operator.
+        /// </summary>
         public Dictionary<string, bool> InfixIsRTL = new Dictionary<string, bool> {
-            { ",", true }
+            { "\n", false },
+            { ";", false },
+            { ",", true },
+            { ":", false }
         };
 
-        public BinaryOperatorLookup InfixOperators = new BinaryOperatorLookup();
+        /// <summary>
+        /// Overload lookup for every infix operator (traverses type tree) - operator -> left type -> right type -> (left, right, scope, ilgenerator, modulebuilder) => void
+        /// </summary>
+        public BinaryOperatorLookup InfixOperators = new BinaryOperatorLookup {
+            { ";", new BinaryOperatorLookup1 {
+                { typeof(object), new BinaryOperatorLookup2 {
+                    { typeof(object), (l, r, s, g, m) => {
+                        //
+                    } }
+                } }
+            } },
+            { ",", new BinaryOperatorLookup1 {
+                { typeof(object), new BinaryOperatorLookup2 {
+                    { typeof(object), (l, r, s, g, m) => {
+                        //
+                    } }
+                } }
+            } },
+            { ":", new BinaryOperatorLookup1 {
+                { typeof(object), new BinaryOperatorLookup2 {
+                    { typeof(object), (l, r, s, g, m) => {
+                        //
+                    } }
+                } }
+            } }
+        }.Alias(";", "\n");
 
+        /// <summary>
+        /// Overload lookup for every prefix operator (traverses type tree) - operator -> operand type -> (operand, inside if operand is outdix else null, scope, ilgenerator, modulebuilder) => void
+        /// </summary>
         public UnaryOperatorLookup PrefixOperators = new UnaryOperatorLookup();
 
+        /// <summary>
+        /// Overload lookup for every postfix operator (traverses type tree) - operator -> operand type -> (operand, inside if operand is outdix else null, scope, ilgenerator, modulebuilder) => void
+        /// </summary>
         public UnaryOperatorLookup PostfixOperators = new UnaryOperatorLookup {
             { "()", new UnaryOperatorLookup1 {
                 { typeof(object), (o, i, s, g, m) => { } }
@@ -59,27 +116,76 @@ namespace CreamPuff {
             } }
         };
 
+        /// <summary>
+        /// The entire code of the program being parsed.
+        /// </summary>
         private string code;
+
+        /// <summary>
+        /// Current index of the parser.
+        /// </summary>
         private int index = 0;
+        // TODO: use this
+        /// <summary>
+        /// Index of the last finished expression.
+        /// </summary>
         private int lastSuccessfulIndex = 0;
+        /// <summary>
+        /// Nesting level of multiline comments at current index.
+        /// </summary>
+        private int commentDepth = 0;
+        /// <summary>
+        /// Whether to keep comments in syntax tree for documentation generation.
+        /// </summary>
+        private int keepComments = 0;
+        /// <summary>
+        /// Current character being processed by the parser.
+        /// </summary>
         private char Character => code[index];
+        /// <summary>
+        /// Whether all items in stack do not expect more data.
+        /// </summary>
         public bool Finished => stack.Count == 0;
+        /// <summary>
+        /// Current node being generated by the parser.
+        /// </summary>
         private Node Current => stack.Count == 0 ? Node : stack.Peek();
+        /// <summary>
+        /// Topmost node of syntax tree, i.e. program node.
+        /// </summary>
         public Node Node { get; private set; }
+        /// <summary>
+        /// Stack of parents of current node.
+        /// </summary>
         private Stack<Node> stack = new Stack<Node>();
+        /// <summary>
+        /// Stack of closing brackets.
+        /// </summary>
         private Stack<char> bracketStack = new Stack<char>();
 
-
-        public Parser(string code) {
+        /// <summary>
+        /// Initialized parser with specified code.
+        /// </summary>
+        /// <param name="code">Code to initialize parser with.</param>
+        public Parser(string code="") {
             this.code = code;
             Node = new Node(NodeType.Expression, 0, 0, null, new List<Node>());
         }
 
+        /// <summary>
+        /// Add more code to parser.
+        /// </summary>
+        /// <param name="code">Code to add.</param>
+        /// <returns>Itself, to provide fluent interface.</returns>
         public Parser AddCode(string code) {
             this.code += code;
             return this;
         }
 
+        /// <summary>
+        /// Parse current code.
+        /// </summary>
+        /// <returns>Itself, to provide fluent interface.</returns>
         public Parser Parse() {
             Whitespace();
             while (index != code.Length && !Finished) {
@@ -111,8 +217,15 @@ namespace CreamPuff {
             return this;
         }
 
+        /// <summary>
+        /// Mutate program into a form usable by interpreter.
+        /// </summary>
         public void Process() => Process(Node);
 
+        /// <summary>
+        /// Mutate node into a form usable by interpreter.
+        /// </summary>
+        /// <param name="node">Node to process.</param>
         public void Process(Node node) {
             switch (node.Type) {
                 case NodeType.Expression:
@@ -124,6 +237,9 @@ namespace CreamPuff {
             }
         }
 
+        /// <summary>
+        /// Clear all parse data. Replaces, not resets, existing data.
+        /// </summary>
         public void Clear() {
             code = "";
             index = 0;
@@ -132,13 +248,32 @@ namespace CreamPuff {
             bracketStack = new Stack<char>();
         }
 
-        public char Whitespace() {
+        /// <summary>
+        /// Consume whitespace.
+        /// </summary>
+        /// <returns>Consumed whitespace.</returns>
+        public string Whitespace() {
             var match = Regexes.Whitespace.Match(code, index);
-            var length = (char) match.Length;
-            index += length;
-            return Regexes.ContainsNonSpace.IsMatch(match.Value) ? (char) 0 : length ;
+            index += match.Length;
+            return match.Value;
+        }
+        
+        /// <summary>
+        /// Try parsing comment.
+        /// </summary>
+        /// <param name="node">Node with contents of comment.</param>
+        /// <returns>Whether a comment was found.</returns>
+        public bool Comment(out Node node) {
+            // TODO
+            node = null;
+            return false;
         }
 
+        /// <summary>
+        /// Try parsing string.
+        /// </summary>
+        /// <param name="node">Node with contents of string.</param>
+        /// <returns>Whether a string was found.</returns>
         public bool String(out Node node) {
             Whitespace();
             var originalIndex = index;
@@ -173,6 +308,9 @@ namespace CreamPuff {
             return true;
         }
 
+        /// <summary>
+        /// Finish current string node. Does not check if current node is a string node.
+        /// </summary>
         public void FinishString() {
             Regex matcher;
             var quote = Node.Data[Node.Data.Length - 1];
@@ -188,6 +326,11 @@ namespace CreamPuff {
                 index++;
         }
 
+        /// <summary>
+        /// Try parsing expression.
+        /// </summary>
+        /// <param name="node">Node with contents of expression.</param>
+        /// <returns>Whether an expression or part thereof was found.</returns>
         public bool Expression(out Node node) {
             Whitespace();
             var originalIndex = index;
@@ -199,18 +342,25 @@ namespace CreamPuff {
             // TODO
             node = new Node(NodeType.Expression, 0, 0, null, new List<Node>());
             stack.Push(node);
-            while (index != code.Length && (String(out var result) || Number(out result) || Identifier(out result) || BracketedExpression(out result)))
+            while (index != code.Length && (Identifier(out var result) || String(out result) || Number(out result) || BracketedExpression(out result)))
                 node.Children.Add(result);
             if (Current.Equals(node))
                 stack.Pop();
             return node.Children.Count != 0;
         }
 
+        /// <summary>
+        /// Finish current expression node. Does not check if current node is expression node.
+        /// </summary>
         public void FinishExpression() {
             Current.End = index;
             stack.Pop();
         }
 
+        /// <summary>
+        /// Process expression, using modified shunting yard algorithm to build syntax tree.
+        /// </summary>
+        /// <param name="node">Node to process.</param>
         public void ProcessExpression(Node node) {
             var stack = new Stack<Node>();
             var operators = new Stack<(Node node, short precedence)>();
@@ -238,7 +388,7 @@ namespace CreamPuff {
                         while (operators.Count != 0) {
                             var previous = operators.Peek();
                             var prev = previous.node;
-                            if (commaIsRTL ? previous.precedence < commaPrecedence : previous.precedence <= commaPrecedence) {
+                            if (commaIsRTL ? commaPrecedence < previous.precedence : commaPrecedence <= previous.precedence) {
                                 if (prev.Type == NodeType.Prefix) {
                                     var item = stack.Pop();
                                     stack.Push(new Node(NodeType.Prefix, prev.Start, item.End, new List<Node> { item }, prev.Data));
@@ -258,7 +408,7 @@ namespace CreamPuff {
                         if (first) {
                             foreach (var op in consecutiveOperators) {
                                 if (!PrefixOperators.ContainsKey(op.Data))
-                                    throw new SyntaxError($"Prefix operator expected, {(InfixOperators.ContainsKey(op.Data) ? "infix" : "postfix")} operator ({op.Data}) found", op.Start, op.End);
+                                    throw new SyntaxError($"Prefix operator expected, {(InfixOperators.ContainsKey(op.Data) ? "infix" : "postfix")} operator ({op.Data}) found", code, op.Start, op.End);
                                 op.Type = NodeType.Prefix;
                                 operators.Push((op, PrefixPrecedence[op.Data]));
                             }
@@ -266,12 +416,22 @@ namespace CreamPuff {
                             first = false;
                             continue;
                         }
-                        int infixIndex = -1, infixPrecedence = -1, end = -1, start = consecutiveOperators.Count;
-                        if (child == last)
+                        int infixIndex = -1, infixPrecedence = -1, end = 0, start = consecutiveOperators.Count - 1;
+                        bool allPrefix = false, allPostfix = false;
+                        if (child == last) {
+                            allPostfix = true;
                             infixIndex = consecutiveOperators.Count;
-                        else {
-                            for (; ++end < consecutiveOperators.Count && PostfixOperators.ContainsKey(consecutiveOperators[end].Data);) ;
-                            for (; --start >= 0 && PrefixOperators.ContainsKey(consecutiveOperators[start].Data);) ;
+                        } else {
+                            for (; PostfixOperators.ContainsKey(consecutiveOperators[end++].Data) || consecutiveOperators[end - 1].Data == "\n";)
+                                if (end == consecutiveOperators.Count) {
+                                    allPostfix = true;
+                                    break;
+                                }
+                            for (; PrefixOperators.ContainsKey(consecutiveOperators[start--].Data) || consecutiveOperators[start + 1].Data == "\n";)
+                                if (start == -1) {
+                                    allPrefix = true;
+                                    break;
+                                }
                             end--;
                             start++;
                             for (i = start; i <= end; i++) {
@@ -282,21 +442,29 @@ namespace CreamPuff {
                                 }
                             }
                             if (infixPrecedence == -1 && end < consecutiveOperators.Count - 1 && start > 0)
-                                throw new SyntaxError($"Infix operator expected, none found", consecutiveOperators[0].Start, consecutiveOperators.Last().End);
+                                throw new SyntaxError($"Infix operator expected, none found", code, consecutiveOperators[0].Start, consecutiveOperators.Last().End);
                             if (infixPrecedence == -1)
-                                if (end == consecutiveOperators.Count - 1)
+                                if (allPostfix)
                                     infixIndex = consecutiveOperators.Count;
-                                else if (start == 0)
+                                else if (allPrefix)
                                     infixIndex = -1;
                         }
-                        for (i = 0; i < infixIndex; i++) {
-                            var curr = consecutiveOperators[i];
+                        if (allPostfix || allPrefix || infixPrecedence != -1 && consecutiveOperators[infixIndex].Data != "\n")
+                            for (i = 0; i < consecutiveOperators.Count; i++)
+                                if (consecutiveOperators[i].Data == "\n") {
+                                    consecutiveOperators.RemoveAt(i--);
+                                    if (i < infixIndex)
+                                        infixIndex--;
+                                }
+                        i = 0;
+                        while (i < infixIndex) {
+                            var curr = consecutiveOperators[i++];
                             var currPrecedence = PostfixPrecedence[curr.Data];
                             Node item;
                             while (operators.Count != 0) {
                                 var previous = operators.Peek();
                                 var prev = previous.node;
-                                if (previous.precedence <= currPrecedence) {
+                                if (currPrecedence <= previous.precedence) {
                                     if (prev.Type == NodeType.Prefix) {
                                         item = stack.Pop();
                                         stack.Push(new Node(NodeType.Prefix, prev.Start, item.End, new List<Node> { item }, prev.Data));
@@ -315,40 +483,40 @@ namespace CreamPuff {
                             else
                                 stack.Push(new Node(NodeType.Postfix, item.Start, curr.End, new List<Node> { item }, curr.Data));
                         }
-                        if (child == last || end == consecutiveOperators.Count - 1)
-                            break; // because infixOperator doesn't exist. or does it? <vsauce music starts>
-                        if (i > 0) {
-                            var infixOperator = consecutiveOperators[i++];
-                            infixOperator.Type = NodeType.Infix;
-                            var isRTL = InfixIsRTL[infixOperator.Data];
-                            while (operators.Count != 0) {
-                                var previous = operators.Peek();
-                                var prev = previous.node;
-                                if (isRTL ? previous.precedence < infixPrecedence : previous.precedence <= infixPrecedence) {
-                                    if (prev.Type == NodeType.Prefix) {
-                                        var item = stack.Pop();
-                                        stack.Push(new Node(NodeType.Prefix, prev.Start, item.End, new List<Node> { item }, prev.Data));
-                                    } else {
-                                        var right = stack.Pop();
-                                        var left = stack.Pop();
-                                        stack.Push(new Node(NodeType.Infix, left.Start, right.End, new List<Node> { left, right }, prev.Data));
-                                    }
-                                    operators.Pop();
-                                } else
-                                    break;
-                            }
-                            operators.Push((infixOperator, InfixPrecedence[infixOperator.Data]));
+                        if (child == last)
+                            break; // because infixOperator shouldn't be here
+                        var infixOperator = infixIndex != -1 && infixIndex != consecutiveOperators.Count ? consecutiveOperators[i++] : new Node(NodeType.Infix, -1, -1, ",");
+                        infixOperator.Type = NodeType.Infix;
+                        var isRTL = InfixIsRTL[infixOperator.Data];
+                        while (operators.Count != 0) {
+                            var previous = operators.Peek();
+                            var prev = previous.node;
+                            if (isRTL ? infixPrecedence < previous.precedence : infixPrecedence <= previous.precedence) {
+                                if (prev.Type == NodeType.Prefix) {
+                                    var item = stack.Pop();
+                                    stack.Push(new Node(NodeType.Prefix, prev.Start, item.End, new List<Node> { item }, prev.Data));
+                                } else {
+                                    var right = stack.Pop();
+                                    var left = stack.Pop();
+                                    stack.Push(new Node(NodeType.Infix, left.Start, right.End, new List<Node> { left, right }, prev.Data));
+                                }
+                                operators.Pop();
+                            } else
+                                break;
                         }
-                        for (; i < consecutiveOperators.Count; i++) {
-                            var op = consecutiveOperators[i];
+                        operators.Push((infixOperator, InfixPrecedence[infixOperator.Data]));
+                        while (i < consecutiveOperators.Count) {
+                            var op = consecutiveOperators[i++];
                             op.Type = NodeType.Prefix;
                             operators.Push((op, PrefixPrecedence[op.Data]));
                         }
+                        consecutiveOperators.Clear();
                         stack.Push(child);
                     }
                 }
             }
-            // lsat should only leave the infix
+            // only infix operators should remaining
+            // TODO: figure out whether prefix operators may remain - this can be done by checking only when child == last
             while (operators.Count != 0) {
                 var right = stack.Pop();
                 var left = stack.Pop();
@@ -364,25 +532,11 @@ namespace CreamPuff {
             }
         }
 
-        // TODO: this might not be needed -prefix and postfix should be applied directly
-        public Node CreateOperatorExpression(Stack<Node> nodes, Node op) {
-            if (op.Type == NodeType.Infix) {
-                Node right = stack.Pop(),
-                    left = stack.Pop();
-                return new Node(NodeType.Infix, left.Start, right.End, new List<Node> { left, right }, op.Data);
-            } else if (op.Type == NodeType.Prefix) {
-                var element = stack.Pop();
-                return new Node(NodeType.Prefix, op.Start, element.End, new List<Node> { element });
-            } else if (op.Type == NodeType.Postfix) {
-                var element = stack.Pop();
-                return new Node(NodeType.Postfix, element.Start, op.End, new List<Node> { element });
-            } else if (op.Type == NodeType.PostfixOutfix) {
-                var element = stack.Pop();
-                return new Node(NodeType.PostfixOutfix, element.Start, op.End, new List<Node> { element, op });
-            }
-            return null;
-        }
-
+        /// <summary>
+        /// Try parsing bracketed expression.
+        /// </summary>
+        /// <param name="node">Node with contents of bracketed expression.</param>
+        /// <returns>Whether a btacketed expression or part thereof was found.</returns>
         public bool BracketedExpression(out Node node) {
             Whitespace();
             var originalIndex = index;
@@ -418,6 +572,9 @@ namespace CreamPuff {
             return true;
         }
 
+        /// <summary>
+        /// Finish current bracket node. Does not check if current node is bracket node.
+        /// </summary>
         public void FinishBracket() {
             var current = Current;
             if (Expression(out var node))
@@ -431,11 +588,19 @@ namespace CreamPuff {
             }
         }
 
+        /// <summary>
+        /// Process bracketed expression. This processes contents as expression, except when only contents are a single operator, in which case returns reference to operator as function.
+        /// </summary>
+        /// <param name="node">Node to process.</param>
         public void ProcessBracket(Node node) {
-            if (node.Children.Count == 1 && node.Children[0].Type == NodeType.Identifier && InfixOperators.ContainsKey(node.Children[0].Data)) {
+            if (
+                node.Children.Count > 0 &&
+                node.Children.All(child => child.Type == NodeType.Identifier && (child.Data == "\n" || InfixOperators.ContainsKey(child.Data))) &&
+                node.Children.Any(child => child.Data != "\n")
+            ) {
                 // functionized operator
                 node.Type = NodeType.Identifier;
-                node.Data = node.Children[0].Data;
+                node.Data = node.Children.First(child => child.Data != "\n").Data;
                 node.Children = null;
             } else
                 ProcessExpression(node);
@@ -461,7 +626,11 @@ namespace CreamPuff {
         }
 
         public bool Identifier(out Node node) {
-            Whitespace();
+            var newline = Regexes.ContainsNewline.Match(Whitespace());
+            if (newline.Success) {
+                node = new Node(NodeType.Identifier, index + newline.Index, index + newline.Index + 1, "\n");
+                return true;
+            }
             var originalIndex = index;
             if (index == code.Length) {
                 node = null;
@@ -514,17 +683,76 @@ namespace CreamPuff {
 
         public static class Regexes {
             // TODO: comments, nested multiline comments, regex
+            /// <summary>
+            /// Match escape sequences in double quoted strings.
+            /// </summary>
             public static Regex DoubleQuotedEscapes = new Regex(@"\\(x[0-9a-fA-F]{2}|x\{[0-9a-fA-F]+\}|[""nt])", RegexOptions.Compiled);
+            /// <summary>
+            /// Match escape sequences in single quoted strings.
+            /// </summary>
             public static Regex SingleQuotedEscapes = new Regex(@"\\(x[0-9a-fA-F]{2}|x\{[0-9a-fA-F]+\}|['nt])", RegexOptions.Compiled);
+            /// <summary>
+            /// Match characters which must be escaped in double quoted strings.
+            /// </summary>
             public static Regex DoubleQuotedUnescapes = new Regex(@"\p{C}|""", RegexOptions.Compiled);
+            /// <summary>
+            /// Match characters which must be escaped in single quoted strings.
+            /// </summary>
             public static Regex SingleQuotedUnescapes = new Regex(@"\p{C}|'", RegexOptions.Compiled);
+            /// <summary>
+            /// Match any whitespace character but space.
+            /// </summary>
             public static Regex ContainsNonSpace = new Regex(@"[\r\n\t\f\v]", RegexOptions.Singleline | RegexOptions.Compiled);
+            /// <summary>
+            /// Match newline character.
+            /// </summary>
+            public static Regex ContainsNewline = new Regex(@"[\r\n]", RegexOptions.Singleline | RegexOptions.Compiled);
+            /// <summary>
+            /// Match all whitespace starting from current index.
+            /// </summary>
             public static Regex Whitespace = new Regex(@"\G\s*", RegexOptions.Singleline | RegexOptions.Compiled);
+            /// <summary>
+            /// Match number starting from current index.
+            /// </summary>
             public static Regex Number = new Regex(@"\G\d[\d_]*(\.[\d_]+)?");
+            /// <summary>
+            /// Match line comment starting from current index.
+            /// </summary>
+            public static Regex LineComment = new Regex(@"\G#.+", RegexOptions.Compiled);
+            /// <summary>
+            /// Match multiline comment starting from current index. Ends either at end of string, before multiline comment opening tag, or before multiline comment closing tag.
+            /// </summary>
+            public static Regex MultilineComment = new Regex(@"\G[^#%]|%(?:[^#]|$)|#(?:[^%]|$)", RegexOptions.Singleline | RegexOptions.Compiled);
+            /// <summary>
+            /// Match contents of double quoted string starting from current index.
+            /// </summary>
             public static Regex DoubleQuotedString = new Regex(@"\G(?:\\x[0-9a-fA-F]{2}|\\x\{[0-9a-fA-F]+\}|\\[""nt]|[^""])*", RegexOptions.Singleline | RegexOptions.Compiled);
+            /// <summary>
+            /// Match contents of single quoted string starting from current index.
+            /// </summary>
             public static Regex SingleQuotedString = new Regex(@"\G(?:\\x[0-9a-fA-F]{2}|\\x\{[0-9a-fA-F]+\}|\\['nt]|[^'])*", RegexOptions.Singleline | RegexOptions.Compiled);
-            public static Regex Identifier = new Regex(@"\G\$+|\G\$*[_\p{L}]+|\G\$*[^\p{L}\p{M}\p{C}\p{Z}0-9'"";\$\[\]\{\}\(\)\
+            /// <summary>
+            /// Match identifier starting from current index.
+            /// </summary>
+            public static Regex Identifier = new Regex(@"\G\$+|\G\$*[_\p{L}]+|\G\$*[^\p{L}\p{M}\p{C}\p{Z}0-9'""\$\[\]\{\}\(\)\
 “”‘’‹›«»（）［］｛｝｟｠⦅⦆〚〛⦃⦄「」〈〉《》【】〔〕⦗⦘『』〖〗〘〙｢｣⟦⟧⟨⟩⟪⟫⟮⟯⟬⟭⌈⌉⌊⌋⦇⦈⦉⦊❛ ❜ ❝ ❞❨❩❪❫❴❵❬❭❮❯❰❱❲❳﴾﴿〈〉⦑⦒⧼⧽﹙﹚﹛﹜﹝﹞⁽⁾₍₎⦋⦌⦍⦎⦏⦐⁅⁆⸢⸣⸤⸥⟅⟆⦓⦔⦕⦖⸦⸧⸨⸩⧘⧙⧚⧛⸜⸝⸌⸍⸂⸃⸄⸅⸉⸊᚛᚜༺༻༼༽]+", RegexOptions.Singleline | RegexOptions.Compiled);
+        }
+    }
+
+    static class DictionaryExtensions {
+        /// <summary>
+        /// Set keys of a dictionay to the same value as that of another key.
+        /// </summary>
+        /// <typeparam name="K">Dictionary key type.</typeparam>
+        /// <typeparam name="V">Dictionary value type.</typeparam>
+        /// <param name="dictionary"Dictionary to modify.></param>
+        /// <param name="original">Key with target valkue.</param>
+        /// <param name="_new">Keys to set value of.</param>
+        /// <returns>Dictionary, to provide fluent interface.</returns>
+        public static Dictionary<K, V> Alias<K, V>(this Dictionary<K, V> dictionary, K original, params K[] _new) {
+            foreach (var key in _new)
+                dictionary[key] = dictionary[original];
+            return dictionary;
         }
     }
 }

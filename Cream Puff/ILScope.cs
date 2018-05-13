@@ -4,6 +4,9 @@ using System.Linq;
 // TODO: lexicalscope
 
 namespace CreamPuff {
+    /// <summary>
+    /// Converts arguments and local variables to/from indices.
+    /// </summary>
     public class ILScope {
         public List<string> Arguments = new List<string>();
         public List<string> Locals = new List<string>();
